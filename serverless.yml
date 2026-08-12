@@ -1,0 +1,191 @@
+service: todo-api
+
+custom:
+  # Per-stage knobs. Anything that should differ between dev and prod lives here
+  # so the rest of the file never needs an if-this-stage condition.
+  stageSettings:
+    dev:
+      corsOrigins:
+        - '*'
+      logRetentionInDays: 7
+      memorySize: 256
+    prod:
+      corsOrigins:
+        - ${env:FRONTEND_ORIGIN, 'https://frontend-origin-not-set.invalid'}
+      logRetentionInDays: 30
+      memorySize: 512
+  settings: ${self:custom.stageSettings.${self:provider.stage}}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: ap-southeast-1
+  # `--stage prod` on the CLI wins; without it we land on dev.
+  stage: ${opt:stage, 'dev'}
+  memorySize: ${self:custom.settings.memorySize}
+  timeout: 10
+  logRetentionInDays: ${self:custom.settings.logRetentionInDays}
+  httpApi:
+    cors:
+      allowedOrigins: ${self:custom.settings.corsOrigins}
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+    authorizers:
+      cognitoJwt:
+        type: jwt
+        identitySource: $request.header.Authorization
+        issuerUrl:
+          Fn::Join:
+            - ''
+            - - 'https://cognito-idp.'
+              - ${self:provider.region}
+              - '.amazonaws.com/'
+              - Ref: CognitoUserPool
+        audience:
+          - Ref: CognitoUserPoolClient
+  environment:
+    TODOS_TABLE: !Ref TodosTable
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:Query
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - !GetAtt TodosTable.Arn
+
+package:
+  patterns:
+    - '!.venv/**'
+    - '!node_modules/**'
+    - '!.serverless/**'
+    - '!**/__pycache__/**'
+    - '!template.yml'
+
+functions:
+  hello:
+    handler: src/handlers/todo.hello
+    events:
+      - httpApi:
+          path: /hello
+          method: get
+  gabel:
+    handler: src/handlers/todo.gabel
+    events:
+      - httpApi:
+          path: /gabel
+          method: get
+  createTodo:
+    handler: src/handlers/todo.create_todo
+    events:
+      - httpApi:
+          path: /todos
+          method: post
+          authorizer:
+            name: cognitoJwt
+  listTodos:
+    handler: src/handlers/todo.list_todos
+    events:
+      - httpApi:
+          path: /todos
+          method: get
+          authorizer:
+            name: cognitoJwt
+  getTodo:
+    handler: src/handlers/todo.get_todo
+    events:
+      - httpApi:
+          path: /todos/{todoId}
+          method: get
+          authorizer:
+            name: cognitoJwt
+  updateTodo:
+    handler: src/handlers/todo.update_todo
+    events:
+      - httpApi:
+          path: /todos/{todoId}
+          method: put
+          authorizer:
+            name: cognitoJwt
+  deleteTodo:
+    handler: src/handlers/todo.delete_todo
+    events:
+      - httpApi:
+          path: /todos/{todoId}
+          method: delete
+          authorizer:
+            name: cognitoJwt
+
+resources:
+  Resources:
+    TodosTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: todo-api-${sls:stage}-todos
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: todoId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: todoId
+            KeyType: RANGE
+
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: todo-api-${sls:stage}-users
+        # Sign in with the email address instead of a separate username.
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 8
+            RequireLowercase: true
+            RequireUppercase: true
+            RequireNumbers: true
+            RequireSymbols: false
+        AccountRecoverySetting:
+          RecoveryMechanisms:
+            - Name: verified_email
+              Priority: 1
+
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: todo-api-${sls:stage}-web
+        UserPoolId: !Ref CognitoUserPool
+        # A browser cannot keep a secret, so this client must not have one.
+        GenerateSecret: false
+        ExplicitAuthFlows:
+          - ALLOW_USER_PASSWORD_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+        AccessTokenValidity: 1
+        IdTokenValidity: 1
+        RefreshTokenValidity: 30
+        TokenValidityUnits:
+          AccessToken: hours
+          IdToken: hours
+          RefreshToken: days
+
+  Outputs:
+    UserPoolId:
+      Value: !Ref CognitoUserPool
+    UserPoolClientId:
+      Value: !Ref CognitoUserPoolClient

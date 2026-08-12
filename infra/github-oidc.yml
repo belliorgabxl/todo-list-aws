@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Lets GitHub Actions deploy the todo-api service without storing any AWS access
+  key. GitHub hands the workflow a short-lived OIDC token, AWS verifies it and
+  swaps it for temporary credentials that expire when the job ends.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Description: The repository allowed to assume the role, as owner/repo
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+
+  CreateOidcProvider:
+    Type: String
+    Description: Set to false if this AWS account already has the GitHub OIDC provider
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+Conditions:
+  ShouldCreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: todo-api-github-actions-deploy
+      Description: Assumed by GitHub Actions to deploy the todo-api service
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              # Only workflows in this repository may assume the role. Without
+              # this line ANY repository on GitHub could.
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:*
+      Policies:
+        - PolicyName: todo-api-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: OwnStacksOnly
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/todo-api-*/*
+
+              - Sid: ValidateTemplateHasNoResourceArn
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: '*'
+
+              - Sid: DeploymentBucket
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                  - s3:GetBucketLocation
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - arn:aws:s3:::todo-api-*
+                  - arn:aws:s3:::todo-api-*/*
+
+              # These services do not support useful resource-level scoping for
+              # every call Serverless makes during a deploy, so they stay broad.
+              - Sid: ServiceApis
+                Effect: Allow
+                Action:
+                  - lambda:*
+                  - apigateway:*
+                  - logs:*
+                  - dynamodb:*
+                  - cognito-idp:*
+                Resource: '*'
+
+              - Sid: ServiceRolesOnly
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/todo-api-*
+
+Outputs:
+  DeployRoleArn:
+    Description: Put this in the workflow as role-to-assume
+    Value: !GetAtt DeployRole.Arn

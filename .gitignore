@@ -1,0 +1,24 @@
+# Node / Serverless Framework
+node_modules/
+.serverless/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local environment and credentials — must never be committed
+.env
+.env.*
+!.env.example
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Stray SAM template exported from the console; it makes serverless switch
+# into CloudFormation mode and refuse to deploy.
+template.yml
+template.yml.bak
