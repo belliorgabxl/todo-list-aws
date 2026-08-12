@@ -120,6 +120,19 @@ Resources:
                   - cognito-idp:*
                 Resource: '*'
 
+              # Serverless v4 remembers which deployment bucket it made by
+              # keeping the name in a Parameter Store entry under this path.
+              - Sid: DeploymentBucketPointer
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/serverless-framework/*
+
               - Sid: ServiceRolesOnly
                 Effect: Allow
                 Action:

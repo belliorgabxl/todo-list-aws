@@ -1,5 +1,9 @@
 service: todo-api
 
+# Without this the CLI grabs whatever version is newest at the moment a build
+# runs, so the same commit could deploy differently next week.
+frameworkVersion: '4.41.0'
+
 custom:
   # Per-stage knobs. Anything that should differ between dev and prod lives here
   # so the rest of the file never needs an if-this-stage condition.
